@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gene Predictor</title>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" integrity="sha384-1q8mTJOASx8j1Au+a5WDVnPi2lkFfwwEAa8hDDdjZlpLegxhjVME1fgjWPGmkzs7" crossorigin="anonymous">
+
+    <!-- Optional theme -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap-theme.min.css" integrity="sha384-fLW2N01lMqjakBkx3l/M9EahuwpSfeNvV63J5ezn3uZzapT0u7EYsXMjQV+0En5r" crossorigin="anonymous">
+
+  </head>
+  <body>
+
+    <div class="container">
+      <div class="header clearfix">
+        <nav>
+          <ul class="nav nav-pills pull-right">
+            <li role="presentation"><a href="/">Upload</a></li>
+            <li role="presentation" class="active"><a href="/view/{{ uid }}">View</a></li>
+            <li role="presentation"><a href="/stats/{{ uid }}">Stats</a></li>
+          </ul>
+        </nav>
+        <h3 class="text-muted">Gene Prediction</h3>
+      </div>
+
+
+      <div class="container">
+        {% for gene in genes %}
+        <div class="row">
+          <div class="col-md-4">
+            <h4>{{ gene.0}}</h4>
+            <p>Start: {{ gene.2 }}</p>
+            <p>End: {{ gene.3 }}</p>
+          </div>
+
+          <div class="col-md-8">
+            <div class="panel panel-primary">
+              <div class="panel-body" style="word-wrap: break-word; overflow-wrap: break-word;">
+                {{gene.1}}
+              </div>
+            </div>
+          </div>
+        </div>
+        <hr>
+
+        {% endfor %}
+      </div>
+
+      <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->
+      <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+      <!-- Include all compiled plugins (below), or include individual files as needed -->
+      <!-- Latest compiled and minified JavaScript -->
+      <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js" integrity="sha384-0mSbJDEHialfmuBBQP6A4Qrprq5OVfW37PRR3j5ELqxss1yVqOtnepnHVP9aJ7xS" crossorigin="anonymous"></script>
+
+
+  </body>
+</html>
