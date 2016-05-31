@@ -33,6 +33,42 @@
             <input type="file" name="myFile">
             <p class="help-block">Upload you bacterial genome here.</p>
           </div>
+
+          <div class="form-group">
+            <a href="#advanced-opts" class="btn btn-warning" data-toggle="collapse">Show advanced options</a>
+          </div>
+
+          <div id="advanced-opts" class="collapse">
+
+            <div class="form-group">
+              <label>Minimum gene length</label>
+              <input type="text" name="shortest_gene", value="50">
+              <p class="help-block">The shortest possible genes to consider.</p>
+            </div>
+
+            <div class="form-group">
+              <label>Minimum gap between predicted genes</label>
+              <input type="text" name="intra_gene_gap", value="40">
+              <p class="help-block">The shortest distance required between genes.</p>
+            </div>
+
+            <div class="form-group">
+              <label>Shine-Dalgarno sequence maximum distance.</label>
+              <input type="text" name="shine_box_distance", value="14">
+              <p class="help-block">The maximum distance between the start of the gene and the <a href="https://en.wikipedia.org/wiki/Shine-Dalgarno_sequence">Shine-Dalgarno sequence</a>.</p>
+
+            </div>
+
+            <div class="form-group">
+              <label>Allow predicted genes to run-off scaffolds?</label>
+              <input type="checkbox" name="runoff" value="allowed">
+              <p class="help-block">You most probably don't want this.</p>
+            </div>
+
+
+
+
+          </div>
           <button type="submit" class="btn btn-default">Submit</button>
         </form>
       </div>

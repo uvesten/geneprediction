@@ -4,16 +4,13 @@ import fileinput
 import functools
 import textwrap
 import multiprocessing as mp
+import argparse
 import queue
 import sys
 import tempfile
+import collections
 
 __author__ = 'uvesten'
-
-SHORTEST_GENE = 50
-RUNOFF_ALLOWED = False
-INTRA_GENE_GAP = 40
-SHINE_BOX_DIST = 14
 
 start_codons = ['TTG', 'CTG', 'ATT', 'ATC', 'ATA', 'ATG', 'GTG']
 stop_codons = ['TAA', 'TAG', 'TGA']
@@ -23,6 +20,11 @@ stop_regexp = re.compile('TA[GA]|TGA')
 
 
 gc_translation = str.maketrans("CG", "11", "ATN")
+
+# named tuple to hold configuration data
+GpConfig = collections.namedtuple(
+    'GpConfig', [
+        'shortest_gene', 'allow_runoff', 'intra_gene_gap', 'shine_box_distance'])
 
 
 def get_gc_content(dna):
@@ -81,12 +83,12 @@ def output_gene(name, count, scaffold, start_pos,
 shine_regexp = re.compile('A?G?GAGG|GGAG|GG.{1}GG')
 
 
-def find_shine_box(scaffold, start_pos, end_pos):
-    if start_pos - SHINE_BOX_DIST < 0:
+def find_shine_box(scaffold, start_pos, end_pos, shine_box_distance):
+    if start_pos - shine_box_distance < 0:
         return None
 
     match = shine_regexp.search(
-        scaffold, start_pos - SHINE_BOX_DIST, start_pos - 6)
+        scaffold, start_pos - shine_box_distance, start_pos - 6)
     if match:
         return (match.group(0), start_pos - match.end(0))
 
@@ -107,7 +109,8 @@ def probable_gene(scaffold, start_pos, end_pos,
         return False
 
 
-def find_genes(name, scaffold_no, scaffold, total_gc, strand):
+def find_genes(name, scaffold_no, scaffold,
+               total_gc, strand, config: GpConfig):
     if not (name and scaffold):
         return
 
@@ -116,7 +119,7 @@ def find_genes(name, scaffold_no, scaffold, total_gc, strand):
     currentGeneNo = 1
     gene_data = []
 
-    while scaffoldLength - currentPos >= SHORTEST_GENE:
+    while scaffoldLength - currentPos >= config.shortest_gene:
         currentPos = find_start_codon(scaffold, currentPos, scaffoldLength)
         if currentPos != -1:
             posInGene = currentPos + 3
@@ -129,12 +132,12 @@ def find_genes(name, scaffold_no, scaffold, total_gc, strand):
                     stop_found = True
                     break
 
-            if posInGene + 3 - currentPos >= SHORTEST_GENE:
-                if stop_found or RUNOFF_ALLOWED:
+            if posInGene + 3 - currentPos >= config.shortest_gene:
+                if stop_found or config.allow_runoff:
                     gcContent = get_gc_content(
                         scaffold[currentPos:posInGene + 3])
                     shineBox = find_shine_box(scaffold, currentPos,
-                                              posInGene + 3)
+                                              posInGene + 3, config.shine_box_distance)
                     hasShineBox = True if shineBox else False
                     if probable_gene(scaffold, currentPos,
                                      posInGene + 3, gcContent, total_gc,
@@ -143,7 +146,7 @@ def find_genes(name, scaffold_no, scaffold, total_gc, strand):
                                           currentPos, posInGene + 3, gcContent,
                                           shineBox, strand))
                         currentGeneNo += 1
-                        currentPos = posInGene + 3 + INTRA_GENE_GAP
+                        currentPos = posInGene + 3 + config.intra_gene_gap
                         continue
                     else:
                         currentPos += 1
@@ -170,10 +173,10 @@ def worker(work_queue, results_queue):
     while True:
         try:
             (current_name, current_scaffold_number,
-             current_scaffold, tot_gc_pct, strand) = work_queue.get_nowait()
+             current_scaffold, tot_gc_pct, strand, config) = work_queue.get_nowait()
 
             gene_data = find_genes(current_name, current_scaffold_number,
-                                   current_scaffold, tot_gc_pct, strand)
+                                   current_scaffold, tot_gc_pct, strand, config)
 
             results_queue.put(gene_data)
 
@@ -183,12 +186,9 @@ def worker(work_queue, results_queue):
             break
 
 
-def handleInput(file_obj, called_from_cmdline):
-
-
+def handleInput(file_obj, config, called_from_cmdline):
 
     tf = tempfile.SpooledTemporaryFile(mode='w+t')
-
 
     totCount = 0
     gcCount = 0
@@ -233,10 +233,10 @@ def handleInput(file_obj, called_from_cmdline):
         if line[0] == '>':
             if current_scaffold != "":
                 work_queue.put((current_name, current_scaffold_number,
-                                current_scaffold, totGcPct, 1))
+                                current_scaffold, totGcPct, 1, config))
 
                 work_queue.put((current_name, current_scaffold_number,
-                                reverse_complement(current_scaffold), totGcPct, -1))
+                                reverse_complement(current_scaffold), totGcPct, -1, config))
 
                 job_counter += 2
             current_name = line[1:-1].strip()
@@ -252,9 +252,11 @@ def handleInput(file_obj, called_from_cmdline):
         current_scaffold_number,
         current_scaffold,
         totGcPct,
-        1))
+        1,
+        config))
+
     work_queue.put((current_name, current_scaffold_number,
-                    reverse_complement(current_scaffold), totGcPct, -1))
+                    reverse_complement(current_scaffold), totGcPct, -1, config))
 
     job_counter += 2
 
@@ -273,10 +275,68 @@ def handleInput(file_obj, called_from_cmdline):
 
     if not called_from_cmdline:
         return (totGcPct, web_data)
-                
 
 
 if __name__ == '__main__':
+    # argparse
+
+    usage = """
+    Finds possible genes in prokaryotic genomes
+    """
+
+    parser = argparse.ArgumentParser(
+        description=usage,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument(
+        '-s', '--shortest_gene',
+        help='The shortest possible genes to consider',
+        metavar='SHORTEST_GENE',
+        dest='shortest_gene',
+        type=int,
+        default=50
+    )
+
+    parser.add_argument(
+        '-g', '--intra_gene_gap',
+        help='The minimum required gap between genes.',
+        metavar='GENE_GAP',
+        dest='intra_gene_gap',
+        type=int,
+        default=40
+    )
+    parser.add_argument(
+        '-b', '--shine_box_distance',
+        help='The maximum distance between the Shine-Delgarno sequence (box) and the predicted gene',
+        metavar='SHINE_DISTANCE',
+        dest='shine_box_distance',
+        type=int,
+        default=14
+    )
+
+    parser.add_argument(
+        '--allow_runoff',
+        dest='allow_runoff',
+        action='store_true',
+        help='Allow genes to run off a scaffold')
+
+    parser.set_defaults(allow_runoff=False)
+
+    parser.add_argument('infile', nargs='?', type=argparse.FileType('r'),
+                        default=sys.stdin, help='Input file in FASTA format')
+    parser.add_argument('outfile', nargs='?', type=argparse.FileType('w'),
+                        default=sys.stdout, help='Output file, in semi-Prodigal format')
+
+    args = parser.parse_args()
+
+    config = GpConfig(
+        args.shortest_gene,
+        args.allow_runoff,
+        args.intra_gene_gap,
+        args.shine_box_distance)
+
+    # redirect stdout
+    sys.stdout = args.outfile
+
     # calculate total genome GC content
-    f = open(sys.argv[1]) if len(sys.argv) > 1 else sys.stdin
-    handleInput(f, True)
+    handleInput(args.infile, config, True)

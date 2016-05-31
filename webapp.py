@@ -61,28 +61,26 @@ class StatsViewer(object):
             display_data = []
             gc_percent = 0
             for i in range(4):
-                
+
                 freqs = []
                 stmt = "SELECT cast(gc_" + str(i) + "*100 AS INTEGER)  as range_id, count(*) as " + \
                     "range_count from uuid_gene where uid = ? group by range_id"
 
                 c.execute(stmt, (uid,))
                 freqs.append(c.fetchall())
-                
+
                 for item in freqs:
                     labels = [x[0] for x in item]
                     values = [x[1] for x in item]
-                    display_data.append((labels,values))
+                    display_data.append((labels, values))
 
                 c.execute("SELECT tot_gc FROM uuid_tot where uid = ?", (uid,))
                 gc_percent = c.fetchone()
 
-
-
-
             tmpl = env.get_template('stats.html')
 
-            return tmpl.render(dd = display_data, gc = int(gc_percent[0]*100), uid = uid)
+            return tmpl.render(dd=display_data, gc=int(
+                gc_percent[0] * 100), uid=uid)
 
 
 def insert_gene_data(uid, web_data):
@@ -120,7 +118,13 @@ def insert_gene_data(uid, web_data):
 class DNAUploadService(object):
     exposed = True
 
-    def POST(self, myFile):
+    def POST(self, myFile, shortest_gene, intra_gene_gap,
+             shine_box_distance, **kwargs):
+
+        allow_runoff = False
+
+        if 'runoff' in kwargs:
+            allow_runoff = True
 
         uid = uuid.uuid4()
         with sqlite3.connect(DB_STRING) as c:
@@ -129,19 +133,22 @@ class DNAUploadService(object):
             c.execute("INSERT INTO user_uuid VALUES (?, ?)",
                       [cherrypy.session.id, str(uid)])
 
+        config = predictor.GpConfig(
+            int(shortest_gene),
+            allow_runoff,
+            int(intra_gene_gap),
+            int(shine_box_distance))
 
         try:
             gene_data = predictor.handleInput(
-                io.TextIOWrapper(myFile.file), False)
+                io.TextIOWrapper(myFile.file), config, False)
         except:
             raise cherrypy.HTTPRedirect("/")
-            
-        insert_gene_data(uid, gene_data)
-        
-        raise cherrypy.HTTPRedirect("/stats/" + str(uid))
-        
 
-            
+        insert_gene_data(uid, gene_data)
+
+        raise cherrypy.HTTPRedirect("/stats/" + str(uid))
+
 
 def setup_database():
     """
