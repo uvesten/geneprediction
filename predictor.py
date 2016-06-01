@@ -9,6 +9,7 @@ import queue
 import sys
 import tempfile
 import collections
+from operator import itemgetter
 
 __author__ = 'uvesten'
 
@@ -23,8 +24,20 @@ gc_translation = str.maketrans("CG", "11", "ATN")
 
 # named tuple to hold configuration data
 GpConfig = collections.namedtuple(
-    'GpConfig', [
-        'shortest_gene', 'allow_runoff', 'intra_gene_gap', 'shine_box_distance'])
+    'GpConfig',
+    'shortest_gene, allow_runoff, intra_gene_gap, shine_box_distance')
+
+# named tuple for the results of gene finding
+GeneData = collections.namedtuple(
+    'GeneData',
+    'scaffold_name, current_gene_no, scaffold, start_pos, end_pos, gc_content, shine_box, strand')
+
+# named tuple for working on a scaffold
+WorkUnit = collections.namedtuple(
+    'WorkUnit',
+    'scaffold_name, scaffold_sequence, tot_gc_pct, strand, config')
+
+GCFractions = collections.namedtuple('GCFractions', 'tot_gc, gcp1, gcp2, gcp3')
 
 
 def get_gc_content(dna):
@@ -44,7 +57,7 @@ def get_gc_content(dna):
     gcp2 = gc2 / part_length
     gcp3 = gc3 / part_length
 
-    return (tot_gc, gcp1, gcp2, gcp3)
+    return GCFractions(tot_gc, gcp1, gcp2, gcp3)
 
 
 def find_start_codon(dna, start, stop):
@@ -64,11 +77,16 @@ def find_stop_codon(dna, start, stop):
         return None
 
 
-def output_gene(name, count, scaffold, start_pos,
-                end_pos, gc_content, shine_box, strand):
-    print('>{0}_{1} # {2} # {3} # {4} # start_type={5};'.format(
-        name, count, start_pos + 1, end_pos,
-        strand, scaffold[start_pos:start_pos + 3]), end="")
+def output_gene(gene_data: GeneData):
+
+    (scaffold_name, current_gene_no, scaffold, start_pos,
+        end_pos, gc_content, shine_box, strand) = gene_data
+
+    direction = "fwd" if strand == 1 else "rev"
+
+    print('>{0}_{6}_{1} # {2} # {3} # {4} # start_type={5};'.format(
+        scaffold_name, current_gene_no, start_pos + 1, end_pos,
+        strand, scaffold[start_pos:start_pos + 3], direction), end="")
     if shine_box:
         print('rbs_motif={0};rbs_spacer={1}bp;'.format(
             shine_box[0], shine_box[1]), end="")
@@ -109,22 +127,26 @@ def probable_gene(scaffold, start_pos, end_pos,
         return False
 
 
-def find_genes(name, scaffold_no, scaffold,
-               total_gc, strand, config: GpConfig):
-    if not (name and scaffold):
+def find_genes(work_unit: WorkUnit):
+
+    (scaffold_name, scaffold_sequence,
+     total_gc, strand, config) = work_unit
+    if not (scaffold_name and scaffold_sequence):
         return
 
     currentPos = 0
-    scaffoldLength = len(scaffold)
+    scaffold_length = len(scaffold_sequence)
     currentGeneNo = 1
     gene_data = []
 
-    while scaffoldLength - currentPos >= config.shortest_gene:
-        currentPos = find_start_codon(scaffold, currentPos, scaffoldLength)
+    while scaffold_length - currentPos >= config.shortest_gene:
+        currentPos = find_start_codon(
+            scaffold_sequence, currentPos, scaffold_length)
         if currentPos != -1:
             posInGene = currentPos + 3
             stop_found = False
-            possible_stops = stop_regexp.finditer(scaffold[posInGene:])
+            possible_stops = stop_regexp.finditer(
+                scaffold_sequence[posInGene:])
 
             for stop_match in possible_stops:
                 if stop_match.start(0) % 3 == 0:
@@ -135,16 +157,16 @@ def find_genes(name, scaffold_no, scaffold,
             if posInGene + 3 - currentPos >= config.shortest_gene:
                 if stop_found or config.allow_runoff:
                     gcContent = get_gc_content(
-                        scaffold[currentPos:posInGene + 3])
-                    shineBox = find_shine_box(scaffold, currentPos,
+                        scaffold_sequence[currentPos:posInGene + 3])
+                    shineBox = find_shine_box(scaffold_sequence, currentPos,
                                               posInGene + 3, config.shine_box_distance)
                     hasShineBox = True if shineBox else False
-                    if probable_gene(scaffold, currentPos,
+                    if probable_gene(scaffold_sequence, currentPos,
                                      posInGene + 3, gcContent, total_gc,
                                      hasShineBox):
-                        gene_data.append((name, currentGeneNo, scaffold,
-                                          currentPos, posInGene + 3, gcContent,
-                                          shineBox, strand))
+                        gene_data.append(GeneData(scaffold_name, currentGeneNo, scaffold_sequence,
+                                                  currentPos, posInGene + 3, gcContent,
+                                                  shineBox, strand))
                         currentGeneNo += 1
                         currentPos = posInGene + 3 + config.intra_gene_gap
                         continue
@@ -172,11 +194,9 @@ def reverse_complement(dna):
 def worker(work_queue, results_queue):
     while True:
         try:
-            (current_name, current_scaffold_number,
-             current_scaffold, tot_gc_pct, strand, config) = work_queue.get_nowait()
+            work_unit = work_queue.get_nowait()
 
-            gene_data = find_genes(current_name, current_scaffold_number,
-                                   current_scaffold, tot_gc_pct, strand, config)
+            gene_data = find_genes(work_unit)
 
             results_queue.put(gene_data)
 
@@ -186,96 +206,51 @@ def worker(work_queue, results_queue):
             break
 
 
-def handleInput(file_obj, config, called_from_cmdline):
+def handleInput(file_obj, config: GpConfig):
 
     tf = tempfile.SpooledTemporaryFile(mode='w+t')
 
-    totCount = 0
-    gcCount = 0
+    genome_length = 0
+    genome_gc_count = 0
     for line in file_obj:
         tf.write(line)
         stripped = line.strip().upper()
         if (stripped[0] != '>'):
             for char in stripped:
                 if char == 'C' or char == 'G':
-                    gcCount += 1
+                    genome_gc_count += 1
 
-                totCount += 1
+                genome_length += 1
 
-    totGcPct = gcCount / totCount
+    genome_gc_fraction = genome_gc_count / genome_length
 
-    print("### Total GC content of genome is {0:.2f}% ###".format(totGcPct))
-
-    # then set up queues for multiprocessing
-
-    work_queue = mp.JoinableQueue()
-    results_queue = mp.Queue()
-
-    # start as many workers as we have cpu cores -1 (for the main process.)
-
-    max_children = mp.cpu_count() - 1
-
-    processes = [
-        mp.Process(
-            target=worker,
-            args=(
-                work_queue,
-                results_queue)) for i in range(max_children)]
-
-    current_scaffold = ""
-    current_scaffold_number = 0
-    current_name = None
-
-    job_counter = 0
+    output_data = []
+    scaffold_sequence = ""
+    scaffold_name = None
 
     tf.seek(0)
-    for line in tf:
+    line = tf.readline()
+    while line:
+
         if line[0] == '>':
-            if current_scaffold != "":
-                work_queue.put((current_name, current_scaffold_number,
-                                current_scaffold, totGcPct, 1, config))
+            scaffold_name = line[1:-1].strip()
 
-                work_queue.put((current_name, current_scaffold_number,
-                                reverse_complement(current_scaffold), totGcPct, -1, config))
+            line = tf.readline()
+            scaffold_sequence = ""
 
-                job_counter += 2
-            current_name = line[1:-1].strip()
-            current_scaffold = ""
-            current_scaffold_number += 1
-        else:
+            while line and line[0] != '>':
 
-            stripped = line.strip().upper()
-            current_scaffold = current_scaffold + stripped
+                stripped = line.strip().upper()
+                scaffold_sequence = scaffold_sequence + stripped
+                line = tf.readline()
 
-    work_queue.put((
-        current_name,
-        current_scaffold_number,
-        current_scaffold,
-        totGcPct,
-        1,
-        config))
+            output_data.extend(find_genes(WorkUnit(scaffold_name,
+                                                   scaffold_sequence, genome_gc_fraction, 1, config)))
 
-    work_queue.put((current_name, current_scaffold_number,
-                    reverse_complement(current_scaffold), totGcPct, -1, config))
+            output_data.extend(find_genes(WorkUnit(scaffold_name,
+                                                   scaffold_sequence, genome_gc_fraction, -1, config)))
 
-    job_counter += 2
-
-    for proc in processes:
-        proc.start()
-
-    web_data = []
-    while job_counter > 0:
-        gene_data = results_queue.get()
-        job_counter -= 1
-        if called_from_cmdline:
-            for item in gene_data:
-                output_gene(*item)
-        else:
-            web_data.extend(gene_data)
-
-    if not called_from_cmdline:
-        return (totGcPct, web_data)
-
+    return (genome_gc_fraction, output_data)
 
 if __name__ == '__main__':
     # argparse
@@ -320,12 +295,19 @@ if __name__ == '__main__':
         action='store_true',
         help='Allow genes to run off a scaffold')
 
+    parser.add_argument(
+        '--prodigal_output',
+        dest='prodigal_output',
+        action='store_true',
+        help='Produce output in semi-prodigal format. (If not set, GFF 3 is used)')
+
     parser.set_defaults(allow_runoff=False)
+    parser.set_defaults(prodigal_output=False)
 
     parser.add_argument('infile', nargs='?', type=argparse.FileType('r'),
                         default=sys.stdin, help='Input file in FASTA format')
     parser.add_argument('outfile', nargs='?', type=argparse.FileType('w'),
-                        default=sys.stdout, help='Output file, in semi-Prodigal format')
+                        default=sys.stdout, help='Output file')
 
     args = parser.parse_args()
 
@@ -339,4 +321,15 @@ if __name__ == '__main__':
     sys.stdout = args.outfile
 
     # calculate total genome GC content
-    handleInput(args.infile, config, True)
+    gc_percentage, data = handleInput(args.infile, config)
+
+    if args.prodigal_output:
+        print(
+            "### Total GC content of genome is {0:.2f}% ###".format(gc_percentage))
+
+        data.sort(key=itemgetter(0))
+
+        for item in data:
+            output_gene(item)
+    else:
+        raise NotImplementedError

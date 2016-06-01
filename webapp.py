@@ -141,7 +141,7 @@ class DNAUploadService(object):
 
         try:
             gene_data = predictor.handleInput(
-                io.TextIOWrapper(myFile.file), config, False)
+                io.TextIOWrapper(myFile.file), config)
         except:
             raise cherrypy.HTTPRedirect("/")
 
