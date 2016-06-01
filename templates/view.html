@@ -28,18 +28,24 @@
 
 
       <div class="container">
+        
+        <div class="row">
+          <div class="col-md-12">
+            <a href="/gff3/{{ uid }}"><button class="btn btn-primary">Download predictions as GFF3</button></a>
+          </div>
+        </div>
+            
+
         {% for gene in genes %}
         <div class="row">
           <div class="col-md-4">
             <h4>{{ gene.0}}</h4>
-            <p>Start: {{ gene.2 }}</p>
-            <p>End: {{ gene.3 }}</p>
           </div>
 
           <div class="col-md-8">
             <div class="panel panel-primary">
               <div class="panel-body" style="word-wrap: break-word; overflow-wrap: break-word;">
-                {{gene.1}}
+                Number of genes: {{gene.1}}
               </div>
             </div>
           </div>

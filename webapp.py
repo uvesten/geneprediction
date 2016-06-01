@@ -5,9 +5,13 @@ import time
 import predictor
 import io
 import uuid
+import collections
 
 
 import cherrypy
+
+from cherrypy.lib.static import serve_fileobj
+
 from jinja2 import Environment, FileSystemLoader
 
 env = Environment(loader=FileSystemLoader('templates'))
@@ -38,13 +42,74 @@ class GeneViewer(object):
 
             c = db.cursor()
             c.execute(
-                "SELECT gene_name, gene, start_pos, end_pos FROM uuid_gene where uid = ?", (uid,))
+                "select scaffold_name, count(*) " +
+                "from uuid_gene where uid = ? group by scaffold_name ", (uid,))
 
             db_genes = c.fetchall()
 
             # print(genes)
 
             return tmpl.render(genes=db_genes, uid=uid)
+
+
+class GFFService(object):
+
+    exposed = True
+
+    def GET(self, uid=None):
+        print(uid)
+        if uuid is None:
+            raise cherrypy.HTTPRedirect("/")
+
+        data = collections.OrderedDict()
+
+        with sqlite3.connect(DB_STRING) as db:
+
+            c = db.cursor()
+            c.execute(
+                "select scaffold_name, sequence_data " +
+                "from uuid_scaffold where uid = ? order by scaffold_name ", (uid,))
+
+            scaffolds = c.fetchall()
+
+
+            for scaffold in scaffolds:
+
+                data[scaffold[0]] = predictor.ScaffoldData(scaffold[1], [])
+
+                c.execute(
+                    "select * from uuid_gene where uid = ? and scaffold_name = ? order by start_pos",
+                    (uid, scaffold[0]))
+
+                genes = c.fetchall()
+
+                for gene in genes:                    
+                    data[scaffold[0]][1].append(predictor.GeneData(
+                        0, gene[3], gene[4], (gene[5], gene[6], gene[7], gene[8]), 
+                        (gene[9], gene[10]), gene[11]))
+
+            # print(genes)
+
+            
+            c.execute("SELECT tot_gc FROM uuid_tot where uid = ?", (uid,))
+            gc_percentage = c.fetchone()
+
+            gff3_formatted = predictor.format_genes_gff3(data)
+
+            
+
+            gff3_file = io.StringIO("")
+
+            print("##gff-version 3.2.1", file=gff3_file)
+            print("# Total GC content of genome is {0:.2f}%".format(gc_percentage[0]), file=gff3_file)
+
+            for line in gff3_formatted:
+                print(line, file=gff3_file)
+
+            gff3_file.seek(0)
+
+            return serve_fileobj(
+                gff3_file, content_type="text/plain; charset=utf-8", disposition="attachment", name="predictions.gff3")
 
 
 class StatsViewer(object):
@@ -83,34 +148,40 @@ class StatsViewer(object):
                 gc_percent[0] * 100), uid=uid)
 
 
-def insert_gene_data(uid, web_data):
+def insert_gene_data(uid, data):
 
     # handle the data so that it matches what our db wants.
 
-    db_format_array = []
-
     uid_str = str(uid)
 
-    (gc_pct, gene_data) = web_data
-
-    for item in gene_data:
-
-        (name, count, scaffold, start_pos,
-         end_pos, gc_content, shine_box, strand) = item
-
-        db_format_array.append((uid_str, name + "_" + str(count) + "_" + str(strand),
-                                scaffold[
-            start_pos:end_pos], start_pos, end_pos,
-            *gc_content, *shine_box, strand))
+    (gc_pct, scaffolds_data) = data
 
     db = sqlite3.connect(DB_STRING)
 
     c = db.cursor()
 
     c.execute("INSERT INTO uuid_tot VALUES (?, ?)", (uid_str, gc_pct))
-    c.executemany(
-        "INSERT INTO uuid_gene VALUES (?, ?, ?, ?, ?, ?, ?, ?, ? ,? ,?, ?)",
-        db_format_array)
+
+    for scaffold_name, contents in scaffolds_data.items():
+
+        c.execute("INSERT INTO uuid_scaffold VALUES(?, ?, ?)",
+                  (uid_str, scaffold_name, contents.scaffold_sequence))
+
+        db_format_array = []
+
+        for gene in contents.genes_data:
+
+            (count, start_pos,
+             end_pos, gc_content, shine_box, strand) = gene
+
+            db_format_array.append((uid_str, scaffold_name + "_" + str(count) + "_" + str(strand),
+                                    scaffold_name,
+                                    start_pos, end_pos,
+                                    *gc_content, *shine_box, strand))
+
+        c.executemany(
+            "INSERT INTO uuid_gene VALUES (?, ?, ?, ?, ?, ?, ?, ?, ? ,? ,?, ?)",
+            db_format_array)
 
     db.commit()
 
@@ -158,9 +229,12 @@ def setup_database():
     with sqlite3.connect(DB_STRING) as con:
         con.execute("CREATE TABLE user_uuid (session_id, uid)")
         con.execute("CREATE TABLE uuid_tot (uid TEXT, tot_gc REAL)")
-        con.execute("CREATE TABLE uuid_gene (uid, gene_name TEXT,  gene TEXT, \
+        con.execute("CREATE TABLE uuid_scaffold (uid, scaffold_name TEXT,  sequence_data TEXT, \
+                                          PRIMARY KEY (uid, scaffold_name))")
+        con.execute("CREATE TABLE uuid_gene (uid, gene_name TEXT, scaffold_name TEXT, \
                                           start_pos INTEGER, end_pos INTEGER, gc_0 REAL, gc_1 REAL, gc_2 REAL, gc_3 REAL, \
-                                          shine_str TEXT, shine_pos INTEGER, strand INTEGER, UNIQUE (uid, gene_name))")
+                                          shine_str TEXT, shine_pos INTEGER, strand INTEGER, PRIMARY KEY (uid, gene_name), \
+                                          FOREIGN KEY (uid, scaffold_name) REFERENCES uuid_scaffold(uid, scaffold_name))")
 
 
 def cleanup_database():
@@ -171,6 +245,7 @@ def cleanup_database():
     with sqlite3.connect(DB_STRING) as con:
         con.execute("DROP TABLE user_uuid")
         con.execute("DROP TABLE uuid_gene")
+        con.execute("DROP TABLE uuid_scaffold")
         con.execute("DROP TABLE uuid_tot")
 
 if __name__ == '__main__':
@@ -183,6 +258,11 @@ if __name__ == '__main__':
             'tools.sessions.on': True,
             'tools.response_headers.on': True,
             'tools.response_headers.headers': [('Content-Type', 'text/plain')],
+        },
+        '/gff3': {
+            'request.dispatch': cherrypy.dispatch.MethodDispatcher(),
+            'tools.sessions.on': True,
+            'tools.response_headers.on': True,
         },
         '/view': {
             'tools.sessions.on': True,
@@ -200,6 +280,7 @@ if __name__ == '__main__':
 
     webapp = Root()
     webapp.dna = DNAUploadService()
+    webapp.gff3 = GFFService()
     webapp.view = GeneViewer()
     webapp.stats = StatsViewer()
     cherrypy.server.socket_host = '0.0.0.0'

@@ -13,14 +13,17 @@ from operator import itemgetter
 
 __author__ = 'uvesten'
 
-start_codons = ['TTG', 'CTG', 'ATT', 'ATC', 'ATA', 'ATG', 'GTG']
-stop_codons = ['TAA', 'TAG', 'TGA']
+start_codons = ['ttg', 'ctg', 'att', 'atc', 'ata', 'atg', 'gtg']
+stop_codons = ['taa', 'tag', 'tga']
 
-start_regexp = re.compile('AT.|[ATCG]TG')
-stop_regexp = re.compile('TA[GA]|TGA')
+start_regexp = re.compile('at.|[atcg]tg')
+stop_regexp = re.compile('ta[ga]|tga')
 
 
-gc_translation = str.maketrans("CG", "11", "ATN")
+shine_regexp = re.compile('a?g?gagg|ggag|gg.{1}gg')
+
+
+gc_translation = str.maketrans("cg", "11", "atn")
 
 # named tuple to hold configuration data
 GpConfig = collections.namedtuple(
@@ -30,7 +33,7 @@ GpConfig = collections.namedtuple(
 # named tuple for the results of gene finding
 GeneData = collections.namedtuple(
     'GeneData',
-    'scaffold_name, current_gene_no, scaffold, start_pos, end_pos, gc_content, shine_box, strand')
+    'current_gene_no, start_pos, end_pos, gc_content, shine_box, strand')
 
 # named tuple for working on a scaffold
 WorkUnit = collections.namedtuple(
@@ -38,6 +41,9 @@ WorkUnit = collections.namedtuple(
     'scaffold_name, scaffold_sequence, tot_gc_pct, strand, config')
 
 GCFractions = collections.namedtuple('GCFractions', 'tot_gc, gcp1, gcp2, gcp3')
+
+ScaffoldData = collections.namedtuple(
+    'ScaffoldData', 'scaffold_sequence, genes_data')
 
 
 def get_gc_content(dna):
@@ -69,7 +75,7 @@ def find_start_codon(dna, start, stop):
 
 
 def find_stop_codon(dna, start, stop):
-    #match = stop_regexp.match(dna, start, stop)
+    # match = stop_regexp.match(dna, start, stop)
 
     if dna[start:stop] in stop_codons:
         return True
@@ -77,16 +83,16 @@ def find_stop_codon(dna, start, stop):
         return None
 
 
-def output_gene(gene_data: GeneData):
+def output_gene(gene_data: GeneData, scaffold_name: str, sequence: str):
 
-    (scaffold_name, current_gene_no, scaffold, start_pos,
+    (current_gene_no, start_pos,
         end_pos, gc_content, shine_box, strand) = gene_data
 
     direction = "fwd" if strand == 1 else "rev"
 
     print('>{0}_{6}_{1} # {2} # {3} # {4} # start_type={5};'.format(
         scaffold_name, current_gene_no, start_pos + 1, end_pos,
-        strand, scaffold[start_pos:start_pos + 3], direction), end="")
+        strand, sequence[:3], direction), end="")
     if shine_box:
         print('rbs_motif={0};rbs_spacer={1}bp;'.format(
             shine_box[0], shine_box[1]), end="")
@@ -94,11 +100,74 @@ def output_gene(gene_data: GeneData):
     print('GC1={0:.2f};GC2={1:.2f};GC3={2:.2f};gc_cont={3:.2f}'.format(
         gc_content[1], gc_content[2], gc_content[3], gc_content[0]))
 
-    assert(len(scaffold[start_pos:end_pos]) % 3 == 0)
-    for line in textwrap.wrap(scaffold[start_pos:end_pos]):
+    assert(len(sequence) % 3 == 0)
+    for line in textwrap.wrap(sequence):
         print(line)
 
-shine_regexp = re.compile('A?G?GAGG|GGAG|GG.{1}GG')
+
+def output_genes(data: collections.OrderedDict):
+
+    for scaffold_name, contents in data.items():
+        for gene_data in contents.genes_data:
+            sequence = contents.scaffold_sequence[
+                gene_data.start_pos: gene_data.end_pos]
+            output_gene(gene_data, scaffold_name, sequence)
+
+
+def format_gene_gff3(gene_data: GeneData, scaffold_name: str, scaffold_length: int,
+                     gff3_number: str) -> list:
+
+    (current_gene_no, start_pos,
+        end_pos, gc_content, shine_box, strand) = gene_data
+
+    formatted_output = []
+
+    direction = "+"
+
+    # set the correct coordinates for gff3 if we're on the reverse strand
+    
+    length = end_pos - start_pos
+
+    assert(length % 3 == 0)
+    if strand == -1:
+        direction = "-"
+
+
+        start_pos = scaffold_length - end_pos 
+        end_pos = start_pos + length 
+
+    start_pos += 1 # 1-based indexing
+
+    gff3_line = scaffold_name + "\tGenePredictor\t{0}\t" + str(
+        start_pos) + "\t" + str(end_pos) + "\t.\t" + direction + "\t.\t{1}"
+
+    gene = gff3_line.format("gene", "ID=gene" + gff3_number)
+    mrna = gff3_line.format("mRNA", "ID=tran" + gff3_number + ";Parent=gene" + gff3_number)
+
+    exon = gff3_line.format("exon", "Parent=tran" + gff3_number)
+    cds = gff3_line.format("CDS", "Parent=tran" + gff3_number)
+
+    formatted_output.extend([gene, mrna, exon, cds])
+
+    return formatted_output
+
+
+def format_genes_gff3(data: collections.OrderedDict) -> list:
+
+    formatted_output = []
+    for scaffold_name, contents in data.items():
+        sequence = contents.scaffold_sequence
+
+        formatted_output.append(
+            "##sequence-region\t{0}\t{1}\t{2}".format(scaffold_name, 1, len(sequence)))
+
+        for index, gene in enumerate(contents.genes_data):
+            gene_output = format_gene_gff3(gene, scaffold_name, len(sequence), str(index + 1))
+            formatted_output.extend(gene_output)
+
+    return formatted_output
+
+
 
 
 def find_shine_box(scaffold, start_pos, end_pos, shine_box_distance):
@@ -164,7 +233,7 @@ def find_genes(work_unit: WorkUnit):
                     if probable_gene(scaffold_sequence, currentPos,
                                      posInGene + 3, gcContent, total_gc,
                                      hasShineBox):
-                        gene_data.append(GeneData(scaffold_name, currentGeneNo, scaffold_sequence,
+                        gene_data.append(GeneData(currentGeneNo,
                                                   currentPos, posInGene + 3, gcContent,
                                                   shineBox, strand))
                         currentGeneNo += 1
@@ -182,7 +251,7 @@ def find_genes(work_unit: WorkUnit):
     return gene_data
 
 
-complement = str.maketrans("ACTG", "TGAC")
+complement = str.maketrans("actg", "tgac")
 
 
 def reverse_complement(dna):
@@ -224,7 +293,8 @@ def handleInput(file_obj, config: GpConfig):
 
     genome_gc_fraction = genome_gc_count / genome_length
 
-    output_data = []
+    output_data = collections.OrderedDict()
+
     scaffold_sequence = ""
     scaffold_name = None
 
@@ -240,15 +310,17 @@ def handleInput(file_obj, config: GpConfig):
 
             while line and line[0] != '>':
 
-                stripped = line.strip().upper()
+                stripped = line.strip().lower()
                 scaffold_sequence = scaffold_sequence + stripped
                 line = tf.readline()
 
-            output_data.extend(find_genes(WorkUnit(scaffold_name,
-                                                   scaffold_sequence, genome_gc_fraction, 1, config)))
+            output_data[scaffold_name] = ScaffoldData(scaffold_sequence, [])
 
-            output_data.extend(find_genes(WorkUnit(scaffold_name,
-                                                   scaffold_sequence, genome_gc_fraction, -1, config)))
+            output_data[scaffold_name].genes_data.extend(find_genes(WorkUnit(scaffold_name,
+                                                                             scaffold_sequence, genome_gc_fraction, 1, config)))
+
+            output_data[scaffold_name].genes_data.extend(find_genes(WorkUnit(scaffold_name,
+                scaffold_sequence[::-1], genome_gc_fraction, -1, config)))
 
     return (genome_gc_fraction, output_data)
 
@@ -327,9 +399,17 @@ if __name__ == '__main__':
         print(
             "### Total GC content of genome is {0:.2f}% ###".format(gc_percentage))
 
-        data.sort(key=itemgetter(0))
+        # xxxdata.sort(key=itemgetter(0))
+        output_genes(data)
 
-        for item in data:
-            output_gene(item)
+        # for item in data:
+        #    output_gene(item)
     else:
-        raise NotImplementedError
+        print('##gff-version 3.2.1')
+        print(
+            "# Total GC content of genome is {0:.2f}%".format(gc_percentage))
+
+        formatted_output = format_genes_gff3(data)
+
+        for line in formatted_output:
+            print(line)
