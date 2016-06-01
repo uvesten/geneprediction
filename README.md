@@ -4,7 +4,9 @@ A simple prokaryotic gene predictor, based on shine-delgarno boxes, ORF:s, and G
 
 ## The command line app
 
-It should be executable on any modern Python 3 installation (though only tested with 3.5)
+Since it makes heavy use of Python 3.5's type hinte (PEP 484), it needs Python >= 3.5
+
+However, older versions of Python 3 with `mypy` might also work.
 
 To run: 
 
@@ -27,6 +29,5 @@ To run:
 
 ## TODO
 
-* Clean up the code, and document
-* Add the possibility to download an output file from the web interface
 * Add more statistics 
+* Implement a speedier prediction algorithm

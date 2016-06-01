@@ -94,14 +94,14 @@ class GFFService(object):
             c.execute("SELECT tot_gc FROM uuid_tot where uid = ?", (uid,))
             gc_percentage = c.fetchone()
 
-            gff3_formatted = predictor.format_genes_gff3(data)
+            formatter = predictor.GFF3Formatter()
+
+            gff3_formatted = formatter.format_output(data, gc_percentage[0])
 
             
 
             gff3_file = io.StringIO("")
 
-            print("##gff-version 3.2.1", file=gff3_file)
-            print("# Total GC content of genome is {0:.2f}%".format(gc_percentage[0]), file=gff3_file)
 
             for line in gff3_formatted:
                 print(line, file=gff3_file)
