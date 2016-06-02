@@ -41,6 +41,22 @@
           <div id="advanced-opts" class="collapse">
 
             <div class="form-group">
+              <label>Select prediction algorithm</label>
+              <select name="selected_predictor">
+                {% for p in predictors %}
+
+                {% if p == dp %}
+                <option value="{{ p }}" selected>{{ p }}</option> 
+                {% else %}
+                <option value="{{ p }}">{{ p }}</option> 
+                {% endif %}
+                {% endfor %}
+              </select>
+              <p class="help-block">Choose which algorithm to use for prediction. The default is safe.</p>
+            </div>
+
+
+            <div class="form-group">
               <label>Minimum gene length</label>
               <input type="text" name="shortest_gene", value="50">
               <p class="help-block">The shortest possible genes to consider.</p>

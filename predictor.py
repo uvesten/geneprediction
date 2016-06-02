@@ -15,6 +15,7 @@ from typing import Dict
 
 __author__ = 'uvesten'
 
+
 # definitions and regexp used globally (for now)
 start_codons = ['ttg', 'ctg', 'att', 'atc', 'ata', 'atg', 'gtg']
 stop_codons = ['taa', 'tag', 'tga']
@@ -32,7 +33,7 @@ gc_translation = str.maketrans("cg", "11", "atn")
 # named tuple to hold configuration data
 GpConfig = collections.namedtuple(
     'GpConfig',
-    'shortest_gene, allow_runoff, intra_gene_gap, shine_box_distance')
+    'predictor, shortest_gene, allow_runoff, intra_gene_gap, shine_box_distance')
 
 # named tuple for the results of gene finding
 GeneData = collections.namedtuple(
@@ -261,7 +262,8 @@ class ProdigalFormatter(OutputFormatter):
     def format_output(
             self, data: Dict[str, ScaffoldData], gc_percentage: int) -> List[str]:
 
-        output = ["### Total GC content of genome is {0:.2f}% ###".format(gc_percentage)]
+        output = [
+            "### Total GC content of genome is {0:.2f}% ###".format(gc_percentage)]
 
         for scaffold_name, contents in data.items():
             for gene_data in contents.genes_data:
@@ -278,7 +280,7 @@ class ProdigalFormatter(OutputFormatter):
 
 class GFF3Formatter(OutputFormatter):
     """
-    Formats gff 3 output. 
+    Formats gff 3 output.
     See http://www.sequenceontology.org/gff3.shtml
     """
 
@@ -326,7 +328,9 @@ class GFF3Formatter(OutputFormatter):
     def format_output(
             self, data: Dict[str, ScaffoldData], gc_percentage: int) -> List[str]:
 
-        formatted_output = ["##gff-version 3.2.1", "# Total GC content of genome is {0:.2f}%".format(gc_percentage)]
+        formatted_output = [
+            "##gff-version 3.2.1",
+            "# Total GC content of genome is {0:.2f}%".format(gc_percentage)]
         for scaffold_name, contents in data.items():
             sequence = contents.scaffold_sequence
 
@@ -341,7 +345,16 @@ class GFF3Formatter(OutputFormatter):
         return formatted_output
 
 
+# here you register your available predictors
+
+AVAILABLE_PREDICTORS = {'naive': NaivePredictor, 'advanced': AdvancedPredictor}
+
+
 def handleInput(file_obj, config: GpConfig):
+    """
+    Parses a FASTA file from file_obj, and starts a gene
+    predictor according to what is set in config
+    """
 
     tf = tempfile.SpooledTemporaryFile(mode='w+t')
 
@@ -364,7 +377,7 @@ def handleInput(file_obj, config: GpConfig):
     scaffold_sequence = ""
     scaffold_name = None
 
-    predictor = NaivePredictor()
+    predictor = AVAILABLE_PREDICTORS[config.predictor]()
 
     tf.seek(0)
     line = tf.readline()
@@ -389,6 +402,7 @@ def handleInput(file_obj, config: GpConfig):
 
     return (genome_gc_fraction, output_data)
 
+
 if __name__ == '__main__':
     # argparse
 
@@ -399,6 +413,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description=usage,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument(
+        '-p', '--predictor', choices=AVAILABLE_PREDICTORS.keys(),
+        help='Choose which predictor to run',
+        dest='predictor',
+        type=str,
+        default='naive')
 
     parser.add_argument(
         '-s', '--shortest_gene',
@@ -449,6 +470,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     config = GpConfig(
+        args.predictor,
         args.shortest_gene,
         args.allow_runoff,
         args.intra_gene_gap,
@@ -466,7 +488,7 @@ if __name__ == '__main__':
 
         output_formatter = ProdigalFormatter()
 
-    else: 
+    else:
 
         output_formatter = GFF3Formatter()
 

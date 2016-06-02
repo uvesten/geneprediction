@@ -24,7 +24,14 @@ class Root(object):
     @cherrypy.expose
     def index(self):
         tmpl = env.get_template('index.html')
-        return tmpl.render()
+
+        # allow user to select which algorithm to use
+
+        predictors = predictor.AVAILABLE_PREDICTORS.keys()
+
+        default_pred = 'naive'
+
+        return tmpl.render(predictors = predictors, dp = default_pred)
 
 
 class GeneViewer(object):
@@ -189,7 +196,7 @@ def insert_gene_data(uid, data):
 class DNAUploadService(object):
     exposed = True
 
-    def POST(self, myFile, shortest_gene, intra_gene_gap,
+    def POST(self, myFile, selected_predictor, shortest_gene, intra_gene_gap,
              shine_box_distance, **kwargs):
 
         allow_runoff = False
@@ -205,6 +212,7 @@ class DNAUploadService(object):
                       [cherrypy.session.id, str(uid)])
 
         config = predictor.GpConfig(
+            selected_predictor,
             int(shortest_gene),
             allow_runoff,
             int(intra_gene_gap),
