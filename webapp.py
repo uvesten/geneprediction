@@ -29,7 +29,7 @@ class Root(object):
 
         predictors = predictor.AVAILABLE_PREDICTORS.keys()
 
-        default_pred = 'naive'
+        default_pred = predictor.DEFAULT_PREDICTOR
 
         return tmpl.render(predictors = predictors, dp = default_pred)
 

@@ -3,12 +3,14 @@ import re
 import fileinput
 import functools
 import textwrap
-import multiprocessing as mp
 import argparse
 import queue
 import sys
+import array
+import numpy as np
 import tempfile
 import collections
+import copy
 from operator import itemgetter
 from typing import List
 from typing import Dict
@@ -55,7 +57,7 @@ complement = str.maketrans("actg", "tgac")
 # utility functions
 
 
-def reverse_complement(dna):
+def reverse_complement(dna: str) -> str:
     """
     Generates the reverse complement of a dna sequence
     """
@@ -64,7 +66,7 @@ def reverse_complement(dna):
     return dna_comp[::-1]
 
 
-def get_gc_content(dna):
+def get_gc_content(dna: str) -> GCFractions:
     """
     Gets the total gc content, and for positions 1-3
     of a DNA sequence
@@ -97,16 +99,270 @@ class GenePredictor:
         raise NotImplementedError
 
 
-class AdvancedPredictor(GenePredictor):
+class SecondPredictor(GenePredictor):
     """
-    Advanced predictor, not implemented yet
+    Advanced predictor, considers the longest genes first. 
+    Still room for improvements, bt reasonably fast on longish genomes. 
+    Works through 6 MB of genome in about 100 seconds, or faster with tuned settings.
     """
-    pass
+
+    SeqFrame = collections.namedtuple(
+        'SeqFrame',
+        'sequence, frame')
+
+    PossibleGene = collections.namedtuple(
+        'PossibleGene',
+        'length, start, stop')
+
+    START_CODON = 1
+    STOP_CODON = 2
+
+    def _adjust_frame(self, sequence: str, frame: int) -> SeqFrame:
+        """
+        Trims a sequence to be a multiple of 3 in its reading frame
+        """
+
+        modulus = len(sequence[frame:]) % 3
+
+        if modulus == 0:
+            return (sequence[frame:], frame)
+        else:
+            return (sequence[frame:-modulus], frame)
+
+    def _encode_frame(self, sequence_frame: SeqFrame) -> np.array:
+
+        numerical_rep = np.zeros(
+            int(len(sequence_frame.sequence) / 3), dtype=np.int8)
+
+        codons = re.finditer(r".{3}", sequence_frame.sequence)
+
+        for index, match in enumerate(codons):
+            # print(codon.group(0))
+
+            codon = match.group(0)
+
+            if codon in start_codons:
+                numerical_rep[index] = self.START_CODON
+            elif codon in stop_codons:
+                numerical_rep[index] = self.STOP_CODON
+
+        return numerical_rep
+
+    def _possible_genes(self, encoded: np.array,
+                        frame: int, shortest_gene: int) -> list:
+
+        starts = []
+        idx = frame
+        possible_genes = []
+
+        idx = 0
+        for i in np.nditer(encoded):
+            if i == self.START_CODON:
+                starts.append(idx * 3 + frame)
+            elif i == self.STOP_CODON:
+
+                # idx +=1 # jump over this stop codon, and include it in the
+                # gene
+                genes_for_stop = []
+                while starts:
+                    start = starts.pop()
+                    length = (idx * 3 + frame) - start
+                    if length < shortest_gene:
+                        continue
+                    genes_for_stop.append(
+                        (length, start, ((idx + 1) * 3 + frame)))
+
+                if genes_for_stop:
+                    possible_genes.extend(genes_for_stop)
+
+            idx += 1
+
+        return possible_genes
+
+    def _find_shine_box(self, scaffold, start_pos,
+                        end_pos, shine_box_distance):
+        if start_pos - shine_box_distance < 0:
+            return None
+
+        match = shine_regexp.search(
+            scaffold, start_pos - shine_box_distance, start_pos - 6)
+        if match:
+            return (match.group(0), start_pos - match.end(0))
+
+    def _verify_candidate(self, candidate: list, sequence: str,
+            shine_box_distance: int, genome_gc_content: int, strand: int, gene_no: int) -> GeneData:
+
+        # if there is a shine box in front of the candidate, and if gc content is high enough,
+        # we verify
+
+        shine_box = self._find_shine_box(
+            sequence, candidate[1], candidate[2], shine_box_distance)
+
+        if not shine_box:
+            return None
+
+        # calculate gc content and check
+
+        gc_content = get_gc_content(sequence[candidate[1]:candidate[2]])
+
+        allowedDiff = 0.12
+
+        gc_pos_3 = genome_gc_content - \
+            allowedDiff <= gc_content.gcp3 and genome_gc_content + \
+            allowedDiff >= gc_content.gcp3
+
+        if not gc_pos_3:
+            return None
+
+        gene_total_gc = genome_gc_content - \
+            allowedDiff <= gc_content.tot_gc and genome_gc_content + \
+            allowedDiff >= gc_content.tot_gc
+
+        if not gene_total_gc:
+            return None
+
+        return GeneData(gene_no, int(candidate['start']), int(candidate[
+                        'stop']), gc_content, shine_box, strand)
+
+    def _filter_genes(self, possibilities: np.array, sequence: str,
+                      config: GpConfig, genome_gc_content: int, strand: int) -> list:
+
+        if possibilities.size == 0:
+            return []
+
+        verified = []
+
+        shine_box_distance = config.shine_box_distance
+
+        #longest = np.argmax(possibilities[:, 0])
+
+        longest = np.argmax(possibilities['length'])
+
+        # print(biggest)
+
+        # print(possibilities[biggest])
+
+        # return []
+
+        foundcounter = 1
+        while possibilities[longest][0] > 0:
+
+            candidate = possibilities[longest]
+
+            # print(candidate[0])
+
+            #possibilities[longest] = 0
+
+            # print(candidate)
+
+            gene = self._verify_candidate(
+                candidate,
+                sequence,
+                shine_box_distance,
+                genome_gc_content,
+                strand, 
+                foundcounter)
+
+            if gene:
+
+                # only keep non-overlapping genes
+                #possibilities = list(filter(lambda x: x[2] < candidate[1] or x[1] > candidate[2], possibilities))
+
+                verified.append(gene)
+                #print("before verified gene" + str(np.count_nonzero(possibilities[:,0])))
+
+                # vectorized way of removing overlaps
+                # we honor the intra gene gap below
+                b = np.all([candidate['start'] <= possibilities['stop'],
+                            possibilities['start'] <= candidate['stop'] + config.intra_gene_gap], axis=0)
+
+                # b = np.any([candidate['stop'] + config.intra_gene_gap < possibilities['start'],
+                # possibilities['stop'] < candidate['start']], axis=0)
+
+                possibilities[b] = (0, 0, 0)
+
+                if foundcounter % 10 == 0:
+                # shrink the array
+
+                    possibilities = possibilities[possibilities['length'] > 0]
 
 
-class NaivePredictor(GenePredictor):
+                foundcounter += 1
+
+                #print("after verified gene" + str(np.count_nonzero(possibilities[:,0])))
+                
+
+            else:
+                possibilities[longest] = (0, 0, 0)
+
+                # print(np.count_nonzero(possibilities[:,0]))
+
+            
+            try:
+                longest = np.argmax(possibilities['length'])
+            except IndexError:
+                break
+
+        return verified
+
+    def _find_genes_on_strand(self, work_unit: WorkUnit,
+                              direction: int) -> List[GeneData]:
+        """
+        Re-encodes the sequence into a numerical representation, one per reading frame
+        """
+        sequence = work_unit.scaffold_sequence
+
+        if direction == -1:
+            sequence = reverse_complement(sequence)
+
+        shortest_gene = work_unit.config.shortest_gene
+
+        combined_possibles = []
+        for rf in range(3):
+            (trimmed, frame) = self._adjust_frame(sequence, rf)
+
+            assert((len(trimmed) % 3) == 0)
+
+            encoded = self._encode_frame(self.SeqFrame(trimmed, frame))
+
+            possibles = self._possible_genes(encoded, frame, shortest_gene)
+
+            combined_possibles.extend(possibles)
+
+        # print(len(combined_possibles))
+
+        #combined_possibles.sort(key = itemgetter(0))
+
+        all_possible = np.array(
+            combined_possibles, dtype=[
+                ('length', int), ('start', int), ('stop', int)])
+
+        all_possible[::-1].sort(order='length')
+
+        # print(len(all_possible))
+
+        verified = self._filter_genes(
+            all_possible,
+            sequence,
+            work_unit.config,
+            work_unit.tot_gc_pct,
+            direction)
+
+        # print(len(verified))
+
+        return verified
+
+    def find_genes(self, work_unit: WorkUnit) -> List[GeneData]:
+
+        gene_data_list = self._find_genes_on_strand(work_unit, 1)
+        gene_data_list.extend(self._find_genes_on_strand(work_unit, -1))
+
+        return gene_data_list
+
+
+class FirstPredictor(GenePredictor):
     """
-    Naive predictor, greedy, and takes the first match.
+    Basic predictor, greedy, and takes the first match.
     Also slow.
     """
 
@@ -347,7 +603,8 @@ class GFF3Formatter(OutputFormatter):
 
 # here you register your available predictors
 
-AVAILABLE_PREDICTORS = {'naive': NaivePredictor, 'advanced': AdvancedPredictor}
+AVAILABLE_PREDICTORS = {'first': FirstPredictor, 'second': SecondPredictor}
+DEFAULT_PREDICTOR = 'second'
 
 
 def handleInput(file_obj, config: GpConfig):
@@ -363,7 +620,7 @@ def handleInput(file_obj, config: GpConfig):
     for line in file_obj:
         tf.write(line)
         stripped = line.strip().upper()
-        if (stripped[0] != '>'):
+        if (stripped and stripped[0] != '>'):
             for char in stripped:
                 if char == 'C' or char == 'G':
                     genome_gc_count += 1
@@ -383,7 +640,7 @@ def handleInput(file_obj, config: GpConfig):
     line = tf.readline()
     while line:
 
-        if line[0] == '>':
+        if line and line[0] == '>':
             scaffold_name = line[1:-1].strip()
 
             line = tf.readline()
@@ -419,7 +676,7 @@ if __name__ == '__main__':
         help='Choose which predictor to run',
         dest='predictor',
         type=str,
-        default='naive')
+        default=DEFAULT_PREDICTOR)
 
     parser.add_argument(
         '-s', '--shortest_gene',
