@@ -34,29 +34,69 @@ class Root(object):
         return tmpl.render(predictors = predictors, dp = default_pred)
 
 
-class GeneViewer(object):
+class ScaffoldViewer(object):
 
     exposed = True
 
-    def GET(self, uid=None):
+    def GET(self, uid=None, *args, **kwargs):
         print(uid)
         if uuid is None:
             raise cherrypy.HTTPRedirect("/")
 
         with sqlite3.connect(DB_STRING) as db:
 
-            tmpl = env.get_template('view.html')
+            if args:
+                    
+                tmpl = env.get_template('view.html')
 
-            c = db.cursor()
-            c.execute(
-                "select scaffold_name, count(*) " +
-                "from uuid_gene where uid = ? group by scaffold_name ", (uid,))
+                c = db.cursor()
+                c.execute(
+                    "select * " +
+                    "from uuid_gene where uid = ? and scaffold_name = ?", (uid, args[0]))
 
-            db_genes = c.fetchall()
+                db_genes = c.fetchall()
 
-            # print(genes)
+                c.execute(
+                "select sequence_data " +
+                "from uuid_scaffold where uid = ? and scaffold_name = ? ", (uid, args[0]))
 
-            return tmpl.render(genes=db_genes, uid=uid)
+                raw = c.fetchone()
+
+                sequence = raw[0]
+
+                rev_sequence = predictor.reverse_complement(sequence)
+
+
+                sequences = []
+                for item in db_genes:
+
+                    if item[11] == -1:
+
+                        sequences.append(rev_sequence[item[3]:item[4]])
+                    else:
+                        sequences.append(sequence[item[3]:item[4]])
+
+
+
+
+
+                return tmpl.render(genes=db_genes, seqs=sequences, uid=uid)
+
+                
+            else: 
+
+                tmpl = env.get_template('scaffold.html')
+
+                c = db.cursor()
+                c.execute(
+                    "select scaffold_name, count(*) " +
+                    "from uuid_gene where uid = ? group by scaffold_name ", (uid,))
+
+                db_genes = c.fetchall()
+
+                # print(genes)
+
+                return tmpl.render(genes=db_genes, uid=uid)
 
 
 class GFFService(object):
@@ -289,7 +329,7 @@ if __name__ == '__main__':
     webapp = Root()
     webapp.dna = DNAUploadService()
     webapp.gff3 = GFFService()
-    webapp.view = GeneViewer()
+    webapp.view = ScaffoldViewer()
     webapp.stats = StatsViewer()
     cherrypy.server.socket_host = '0.0.0.0'
     cherrypy.quickstart(webapp, '/', conf)

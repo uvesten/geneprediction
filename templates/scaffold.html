@@ -28,29 +28,24 @@
 
 
       <div class="container">
-
+        
         <div class="row">
           <div class="col-md-12">
             <a href="/gff3/{{ uid }}"><button class="btn btn-primary">Download predictions as GFF3</button></a>
           </div>
         </div>
-
+            
 
         {% for gene in genes %}
         <div class="row">
           <div class="col-md-4">
-            <h4>{{ gene.1 }}</h4>
-            <p>Start: {{ gene.3 }}</p>
-            <p>End: {{ gene.4 }}</p>
+            <a href="/view/{{ uid }}/{{ gene.0 }}"><h4>{{ gene.0}}</h4></a>
           </div>
 
           <div class="col-md-8">
             <div class="panel panel-primary">
               <div class="panel-body" style="word-wrap: break-word; overflow-wrap: break-word;">
-                {{ seqs[loop.index0] }}
-                <div class="panel-footer">
-                  <a href="http://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastx&PAGE_TYPE=BlastSearch&BLAST_SPEC=&LINK_LOC=blasttab&QUERY={{ seqs[loop.index0] }}&GENETIC_CODE=11" target="_blank"><button class="btn btn-success">Blast this sequence at NCBI</button></a>
-                </div>
+                Number of genes: {{gene.1}}
               </div>
             </div>
           </div>
