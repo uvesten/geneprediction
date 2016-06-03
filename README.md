@@ -6,7 +6,10 @@ A simple prokaryotic gene predictor, based on shine-delgarno boxes, ORF:s, and G
 
 Since it makes heavy use of Python 3.5's type hinte (PEP 484), it needs Python >= 3.5
 
-However, older versions of Python 3 with `mypy` might also work.
+(However, older versions of Python 3 with `mypy` might also work.)
+
+The new predictor also needs `numpy` installed. 
+
 
 To run: 
 
@@ -29,5 +32,5 @@ To run:
 
 ## TODO
 
+* Add Shine-Dalgarno sequences to GFF3 output
 * Add more statistics 
-* Implement a speedier prediction algorithm
